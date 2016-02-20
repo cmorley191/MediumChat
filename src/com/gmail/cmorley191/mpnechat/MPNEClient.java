@@ -1,3 +1,31 @@
+/*
+ * IMPORTANT Commenting note: MPNEClient is largely contained in one method,
+ * so its comments are thorough as to promote readability. See the table of
+ * contents below and the section headers (block comments starting with "~")
+ */
+/*-
+ * Table of contents: (order of sections)
+ * 
+ * public class MPNEClient
+ * 	~Protocol flags
+ * 	~Working variables
+ * 
+ * 	public static void main
+ * 		~Initialization
+ * 		~Running loop
+ * 			~If user inputs a command
+ * 				~Command: help
+ * 				~Command: exit
+ * 				~Command: info
+ * 				~Command: connect
+ * 				~Command: list
+ * 				~Command: disconnect
+ * 				~Command: name
+ * 				~Unknown command
+ * 			~If user inputs a message
+ * 		~Finalization
+ */
+
 package com.gmail.cmorley191.mpnechat;
 
 import java.io.IOException;
@@ -22,18 +50,83 @@ import com.gmail.cmorley191.mpne.MPNESocket.SocketPeerConnection;
 public class MPNEClient {
 
 	/*
-	 * Protocol flags
+	 * ~Protocol flags (sequences of bytes used to structure the data packets,
+	 * abbreviated PF)
+	 */
+	/*
+	 * Protocol flag terminology: "Level" indicates in which section flags
+	 * appear - "L1L2L3L4L5L6..." (a flag in L2 comes directly after L1 with no
+	 * bytes in between, for example). "final" indicates this is the last flag
+	 * used in a packet (though other information may follow the final flag if
+	 * the flag requires it, e.g. MESSAGE_TEXT requires the message in plain
+	 * text).
+	 */
+
+	/*-
+	 * How to read or use the protocol flag commenting scheme:
+	 * Each flag lists its location, purpose, and protocol. (lack of a protocol means just use the flag alone)
+	 * Start by adding the L1 flag.
+	 * Then find the L2 flag applicable to the situation.
+	 * Continue adding flags until a final flag is added.
+	 * 
+	 * Example: 
+	 * Structuring a chat message from user "John": Hello, world!
+	 * L1: PF_MEDIUMCHAT (because it is mandatory for all packets)
+	 * L2: PF_MESSAGE (because it is for messages from peer users)
+	 * L3: PF_MESSAGE_OPTION_PROFILE (because it is for messages from peer users that have usernames)
+	 * L4, final: PF_MESSAGE_TEXT (because it is for messages from peer users and it is a final flag)
+	 * 
+	 * The packet would look like:
+	 * [PF_MEDIUMCHAT][PF_MESSAGE][PF_MESSAGE_OPTION_PROFILE][4 (the length of "John")]["John"][PF_MESSAGE_TEXT]["Hello, world!"]
+	 * The non-flag information is due to the individual packet protocols listed in their comments.
+	 * 
+	 * Note that the variables are listed in order of relevance, not level.
+	 */
+
+	/**
+	 * (L1) for all packets in Medium Chat.
 	 */
 	private static final byte[] PF_MEDIUMCHAT = new byte[] { 1, 77, 25 };
-	private static final byte[] PF_MESSAGE = new byte[] { 7 };
+
+	/**
+	 * (L2, after MEDIUMCHAT) for all messages from peer users.
+	 */
+	private static final byte[] PF_MESSAGE = new byte[] { 2 };
+	/**
+	 * (L4, final, after MESSAGE_OPTION category) for all messages from peer
+	 * users.
+	 * <p>
+	 * Indicates the start of the peer user's message content.<br>
+	 * Protocol: [flag][remaining bytes: message in plain text] (end of packet)
+	 * <p>
+	 * Example: Message of "Hello, World!"<br>
+	 * [PF_MESSAGE] ["Hello, World!"] (end of packet)
+	 */
 	private static final byte[] PF_MESSAGE_TEXT = new byte[] { 2 };
+	/**
+	 * (L3, part of MESSAGE_OPTION category, after MESSAGE) for all messages
+	 * from peer users with usernames. Can share L3 with others from category.
+	 * <p>
+	 * Indicates the start of the peer user's username.<br>
+	 * Protocol: [header][1 byte: length of the username ({@code len})][
+	 * {@code len} bytes: username in plain text]
+	 * <p>
+	 * Example: Message from "John"<br>
+	 * [PF_MESSAGE_TEXT] [4] ["John"]
+	 */
 	private static final byte[] PF_MESSAGE_OPTION_PROFILE = new byte[] { 17 };
 
+	/*
+	 * ~Functional variables
+	 */
+	/**
+	 * This client's username data.
+	 */
 	private static byte[] currentProfile = null;
 
 	public static void main(String[] args) {
 		/*
-		 * Initialization
+		 * ~Initialization
 		 */
 		Scanner scanner = new Scanner(System.in);
 
@@ -54,19 +147,19 @@ public class MPNEClient {
 		System.out.println("Enter to send data to connected peers. Use \"/help\" for a list of commands.");
 
 		/*
-		 * Running loop
+		 * ~Running loop
 		 */
 		while (true) {
 			String line = scanner.nextLine();
 
 			/*
-			 * Input is command
+			 * ~If user inputs a command
 			 */
 			if (line.startsWith("/")) {
 				line = line.substring(1);
 
 				/*
-				 * Command: help
+				 * ~Command: help
 				 */
 				if (line.startsWith("help")) {
 					System.out.println("/help - Shows this list");
@@ -78,13 +171,13 @@ public class MPNEClient {
 					System.out.println("/name [username] - Sets this client's display name");
 
 					/*
-					 * Command: exit
+					 * ~Command: exit
 					 */
 				} else if (line.startsWith("exit"))
 					break;
 
 				/*
-				 * Command: info
+				 * ~Command: info
 				 */
 				else if (line.startsWith("info")) {
 					try {
@@ -98,7 +191,7 @@ public class MPNEClient {
 				}
 
 				/*
-				 * Command: connect
+				 * ~Command: connect
 				 */
 				else if (line.startsWith("connect")) {
 					line = line.substring(7);
@@ -165,7 +258,7 @@ public class MPNEClient {
 					}
 
 					/*
-					 * Command: list
+					 * ~Command: list
 					 */
 				} else if (line.startsWith("list")) {
 					System.out.println(peers.size() + " open channel" + ((peers.size() != 1) ? "s" : "")
@@ -174,7 +267,7 @@ public class MPNEClient {
 						System.out.println(peer.getAddress().toString() + ":" + peer.getPort());
 
 					/*
-					 * Command: disconnect
+					 * ~Command: disconnect
 					 */
 				} else if (line.startsWith("disconnect")) {
 					line = line.substring(10);
@@ -203,7 +296,7 @@ public class MPNEClient {
 					}
 
 					/*
-					 * Command: name
+					 * ~Command: name
 					 */
 				} else if (line.startsWith("name")) {
 					line = line.substring(4);
@@ -216,13 +309,13 @@ public class MPNEClient {
 					}
 
 					/*
-					 * Unknown command
+					 * ~Unknown command
 					 */
 				} else
 					System.out.println("Unknown command");
 
 				/*
-				 * Input is text to send
+				 * ~If user inputs a message
 				 */
 			} else {
 				int errors = 0;
@@ -241,11 +334,11 @@ public class MPNEClient {
 					System.out.println("Error sending message to " + errors + "peers");
 			}
 		}
-		
+
 		/*
-		 * Finalization
+		 * ~Finalization
 		 */
-		
+
 		socket.close();
 		scanner.close();
 		System.exit(0);
