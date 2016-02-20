@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Scanner;
 
 import com.gmail.cmorley191.mpne.ConnectionListener;
@@ -19,6 +20,16 @@ import com.gmail.cmorley191.mpne.MPNESocket.SocketPeerConnection;
  *
  */
 public class MPNEClient {
+
+	/*
+	 * Protocol flags
+	 */
+	private static final byte[] PF_MEDIUMCHAT = new byte[] { 1, 77, 25 };
+	private static final byte[] PF_MESSAGE = new byte[] { 7 };
+	private static final byte[] PF_MESSAGE_TEXT = new byte[] { 2 };
+	private static final byte[] PF_MESSAGE_OPTION_PROFILE = new byte[] { 17 };
+
+	private static byte[] currentProfile = null;
 
 	public static void main(String[] args) {
 		/*
@@ -60,15 +71,31 @@ public class MPNEClient {
 				if (line.startsWith("help")) {
 					System.out.println("/help - Shows this list");
 					System.out.println("/exit - Closes the socket and exits");
+					System.out.println("/info - Shows information about this client and session");
 					System.out.println("/connect [host] [port] - Opens two-way channel to this peer");
 					System.out.println("/list - Lists all open peer channels");
 					System.out.println("/disconnect [host] - Closes all channels to the specified host");
+					System.out.println("/name [username] - Sets this client's display name");
 
 					/*
 					 * Command: exit
 					 */
 				} else if (line.startsWith("exit"))
 					break;
+
+				/*
+				 * Command: info
+				 */
+				else if (line.startsWith("info")) {
+					try {
+						System.out.println("Local host IP: " + InetAddress.getLocalHost().getHostAddress());
+					} catch (UnknownHostException e) {
+					}
+					System.out.println("Local host port: " + socket.getPort());
+					System.out.println(((currentProfile == null)
+							? "No username set - others are shown this machine's IP and port as the username"
+							: "Current username: " + new String(currentProfile)));
+				}
 
 				/*
 				 * Command: connect
@@ -82,18 +109,54 @@ public class MPNEClient {
 						try {
 							SocketPeerConnection connection = socket.new SocketPeerConnection(
 									InetAddress.getByName(parts[1]), Integer.parseInt(parts[2]));
-							ConnectionListener listener = new ConnectionListener() {
+							String host = connection.getAddress().getHostAddress() + ":" + connection.getPort();
+							if (peers.contains(connection)) {
+								System.out.println("Channel already open to " + host);
+							} else {
+								ConnectionListener listener = new ConnectionListener() {
 
-								@Override
-								public void dataReceived(byte[] data) {
-									System.out.println("Received: " + new String(data));
-								}
-							};
-							connection.addConnectionListener(listener);
-							peerListeners.add(listener);
-							peers.add(connection);
-							System.out.println("Channel open to " + connection.getAddress().toString() + ":"
-									+ connection.getPort());
+									@Override
+									public void dataReceived(byte[] data) {
+										int pos = 0;
+										if (!startsWith(data, PF_MEDIUMCHAT, pos))
+											return;
+										pos += PF_MEDIUMCHAT.length;
+										if (startsWith(data, PF_MESSAGE, pos)) {
+											pos += PF_MESSAGE.length;
+											String profile = host;
+											while (true) {
+												if (startsWith(data, PF_MESSAGE_TEXT, pos)) {
+													pos += PF_MESSAGE_TEXT.length;
+													System.out.println("<" + profile + "> "
+															+ new String(Arrays.copyOfRange(data, pos, data.length)));
+													break;
+												} else if (startsWith(data, PF_MESSAGE_OPTION_PROFILE, pos)) {
+													pos += PF_MESSAGE_OPTION_PROFILE.length;
+													int len = data[pos];
+													pos++;
+													profile = new String(Arrays.copyOfRange(data, pos, pos + len));
+													pos += len;
+												} else
+													break;
+											}
+										}
+									}
+
+									private boolean startsWith(byte[] data, byte[] expr, int startPos) {
+										if (expr.length > data.length - startPos)
+											return false;
+										for (int i = 0; i < expr.length; i++)
+											if (data[startPos + i] != expr[i])
+												return false;
+										return true;
+									}
+								};
+								connection.addConnectionListener(listener);
+								peerListeners.add(listener);
+								peers.add(connection);
+								System.out.println("Channel open to " + connection.getAddress().toString() + ":"
+										+ connection.getPort());
+							}
 						} catch (UnknownHostException e) {
 							System.out.println("Invalid host");
 						} catch (NumberFormatException e) {
@@ -140,6 +203,19 @@ public class MPNEClient {
 					}
 
 					/*
+					 * Command: name
+					 */
+				} else if (line.startsWith("name")) {
+					line = line.substring(4);
+					String[] parts = line.split(" ");
+					if (parts.length != 2)
+						System.out.println("Bad syntax");
+					else {
+						currentProfile = parts[1].getBytes();
+						System.out.println("Username set to " + parts[1]);
+					}
+
+					/*
 					 * Unknown command
 					 */
 				} else
@@ -152,7 +228,12 @@ public class MPNEClient {
 				int errors = 0;
 				for (SocketPeerConnection peer : peers)
 					try {
-						peer.send(line.getBytes());
+						if (currentProfile == null)
+							peer.send(MPNEClient.concat(PF_MEDIUMCHAT, PF_MESSAGE, PF_MESSAGE_TEXT, line.getBytes()));
+						else
+							peer.send(MPNEClient.concat(PF_MEDIUMCHAT, PF_MESSAGE, PF_MESSAGE_OPTION_PROFILE,
+									new byte[] { (byte) currentProfile.length }, currentProfile, PF_MESSAGE_TEXT,
+									line.getBytes()));
 					} catch (IOException e1) {
 						errors++;
 					}
@@ -160,8 +241,34 @@ public class MPNEClient {
 					System.out.println("Error sending message to " + errors + "peers");
 			}
 		}
-
+		
+		/*
+		 * Finalization
+		 */
+		
 		socket.close();
 		scanner.close();
+		System.exit(0);
+	}
+
+	/**
+	 * Concatenates the specified byte arrays into a single byte array.
+	 * 
+	 * @param arrays
+	 *            the arrays to be concatenated
+	 * @return one array containing all the elements in each array specified
+	 *         concatenated
+	 */
+	private static byte[] concat(byte[]... arrays) {
+		int len = 0;
+		for (byte[] array : arrays)
+			len += array.length;
+		byte[] full = new byte[len];
+		int pos = 0;
+		for (byte[] array : arrays) {
+			System.arraycopy(array, 0, full, pos, array.length);
+			pos += array.length;
+		}
+		return full;
 	}
 }
